@@ -24,9 +24,22 @@ struct Calculator {
     selected_equals: bool,
 }
 
-const HELP_TEXT: &str = "[←↑↓→: select prev] [space: use prev] [home/end: move] [ctrl+q: quit]";
-
 fn main() {
+    let mut is_help_requested = false;
+    let help_text_short: String = format!(
+        "{}{}[h: help] [ctrl+q: quit]{}{}",
+        color::Bg(color::AnsiValue::grayscale(5)),
+        color::Fg(color::AnsiValue::grayscale(11)),
+        color::Bg(color::Reset),
+        color::Fg(color::Reset));
+    let help_text_long: String = format!(
+        "{}{}Type an expression, like \"355/113\" or \"(9+8)/(7+6)\" and hit return!\n\rprevious calculations: [←↑↓→: select] [space: use selected] [pgdn/pgup: show more/fewer prevs]\n\rediting: [home/end: move]\n\rother: [h: hide help] [ctrl+q: quit]{}{}",
+        color::Bg(color::AnsiValue::grayscale(5)),
+        color::Fg(color::AnsiValue::grayscale(11)),
+        color::Bg(color::Reset),
+        color::Fg(color::Reset));
+    let mut help_text = &help_text_short;
+
     let mut calc = Calculator {
         calc: String::from(""),
         calc_pos: 0,
@@ -34,17 +47,14 @@ fn main() {
         selected_calc: 0,
         selected_equals: false,
     };
-    let history_items: u8 = 10;
+    let mut history_items: u8 = 10;
 
     let stdin = stdin();
     //setting up stdout and going into raw mode
     let mut stdout = stdout().into_raw_mode().unwrap();
 
-    write!(stdout, "{}{}\n{}{}", termion::clear::All, termion::cursor::Goto(1,1), HELP_TEXT, termion::cursor::Goto(1,1)).unwrap();
+    write!(stdout, "{}{}\n{}{}", termion::clear::All, termion::cursor::Goto(1,1), help_text, termion::cursor::Goto(1,1)).unwrap();
 
-    //printing welcoming message, clearing the screen and going to left top corner with the cursor
-    //write!(stdout, r#"{}{}ctrl + q to exit, ctrl + h to print "Hello world!", alt + t to print "termion is cool""#, termion::cursor::Goto(1, 1), termion::clear::All)
-    //        .unwrap();
     stdout.flush().unwrap();
 
     //detecting keydown events
@@ -55,7 +65,6 @@ fn main() {
         match &key {
             Key::Ctrl('q') => break,
             Key::Ctrl('c') => break,
-            //x if Calculator::is_typeable_char(x) => calc.append_key_to_calc(&CalcKey::Key(x)),
             Key::Char('0') => calc.append_key_to_calc(&CalcKey::Key('0')),
             Key::Char('1') => calc.append_key_to_calc(&CalcKey::Key('1')),
             Key::Char('2') => calc.append_key_to_calc(&CalcKey::Key('2')),
@@ -73,7 +82,31 @@ fn main() {
             Key::Char('(') => calc.append_key_to_calc(&CalcKey::Key('(')),
             Key::Char(')') => calc.append_key_to_calc(&CalcKey::Key(')')),
             Key::Char('.') => calc.append_key_to_calc(&CalcKey::Key('.')),
+            Key::Char('h') => {
+                is_help_requested = !is_help_requested;
+                if is_help_requested {
+                    help_text = &help_text_long;
+                } else {
+                    help_text = &help_text_short;
+                }
+            },
             Key::Backspace => calc.append_key_to_calc(&CalcKey::Delete),
+            Key::PageDown => {
+                if history_items < 100 && usize::from(history_items) < calc.prev_calcs.len() {
+                    history_items += 1;
+                }
+            },
+            Key::PageUp => {
+                if !calc.prev_calcs.is_empty() {
+                    if usize::from(history_items) > calc.prev_calcs.len() {
+                        while usize::from(history_items) >= calc.prev_calcs.len() {
+                            history_items -= 1;
+                        }
+                    } else if history_items > 0 {
+                        history_items -= 1;
+                    }
+                }
+            },
             Key::Char(' ') => {
                 if calc.selected_calc == 0 {
                     calc.append_key_to_calc(&CalcKey::Key(' '));
@@ -113,7 +146,7 @@ fn main() {
                 }
             }
             Key::Char('\n') => calc.perform_calculation(),
-            //x => println!("{:?}", x)
+            //x => { calc.calc = format!("{:?}", x); }
             _ => ()
         }
 
@@ -125,8 +158,7 @@ fn main() {
             // print the currently-being-typed calculation
             &calc.calc).unwrap();
 
-        // print the last 10 previous calcs in backwards order
-        // TODO: truncate vector to only keep at most the last 100? 1000? calcs
+        // print the last N previous calcs in backwards order
         let mut line = 1;
         for (input, output) in calc.prev_calcs.iter().rev().take(history_items.into()) {
             // check if this line is selected before incrementing line number, since
@@ -172,35 +204,21 @@ fn main() {
         line += 1;
         write!(stdout, "{}{}\n",
             termion::cursor::Goto(1,line.into()),
-            HELP_TEXT).unwrap();
+            help_text).unwrap();
 
         write!(stdout, "{}",
             // go to end of currently-being-typed calculation
             termion::cursor::Goto(calc.calc_pos+1,1)).unwrap();
-
-        match &key {
-            //x => println!("{:?}", x)
-            _ => ()
-        }
 
         stdout.flush().unwrap();
     }
 }
 
 impl Calculator {
-    /*const TYPEABLE_CHARS: [Key; 18] = [
-        Key::Char('0'), Key::Char('1'), Key::Char('2'), Key::Char('3'),
-        Key::Char('4'), Key::Char('5'), Key::Char('6'), Key::Char('7'),
-        Key::Char('8'), Key::Char('9'), Key::Char('+'), Key::Char('-'),
-        Key::Char('*'), Key::Char('/'), Key::Char('('), Key::Char(')'),
-        Key::Char(' '), Key::Char('.')];
-
-    fn is_typeable_char(c: &Key) -> bool {
-        Calculator::TYPEABLE_CHARS.contains(&c)
-    }*/
 
     fn append_key_to_calc(&mut self, k: &CalcKey) {
-        // calc: &mut String, pos: &mut u16,
+        self.selected_calc = 0;
+        self.selected_equals = false;
         match k {
             CalcKey::Key(x) => {
                 self.calc.insert((self.calc_pos).into(), *x);
@@ -236,6 +254,9 @@ impl Calculator {
             _ => CalcResult::Error(String::from("error"))
         };
         self.prev_calcs.push((calc_copy, calc_equals));
+        while self.prev_calcs.len() > 1000 {
+            self.prev_calcs.remove(0);
+        }
         self.calc.clear();
         self.calc_pos = 0;
     }
@@ -281,22 +302,3 @@ impl Calculator {
         }
     }
 }
-/*
-fn format_prev_calculations(&mut self) -> String {
-    let mut formatted = String::from("");
-    for (calc, output) in &self.prev_calculations {
-        if !formatted.is_empty() {
-            formatted.push('\n')
-        }
-        formatted.push_str(calc);
-        formatted.push_str(" = ");
-        let formatted_output = match &output {
-            CalcResult::Float(value) => value.to_string(),
-            CalcResult::Integer(value) => value.to_string(),
-            CalcResult::Error(string) => String::from(string)
-        };
-        formatted.push_str(&formatted_output);
-    }
-    return formatted;
-}
-*/
