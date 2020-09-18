@@ -22,8 +22,9 @@ enum CalcResult {
     Error(String)
 }
 
+// different types of tokens chars can belong to
 #[derive(PartialEq)]
-enum CalcToken {
+enum CalcCharToken {
     Digit,
     Dot,
     Space,
@@ -31,15 +32,19 @@ enum CalcToken {
     Paren
 }
 
-impl CalcToken {
+impl CalcCharToken {
     fn all_chars(&self) -> &str {
         match *self {
-            CalcToken::Digit => "0123456789",
-            CalcToken::Dot => ".",
-            CalcToken::Space => " ",
-            CalcToken::Operator => "+-*/",
-            CalcToken::Paren => "()"
+            CalcCharToken::Digit => "0123456789",
+            CalcCharToken::Dot => ".",
+            CalcCharToken::Space => " ",
+            CalcCharToken::Operator => "+-*/",
+            CalcCharToken::Paren => "()"
         }
+    }
+
+    fn matches_char(&self, c: char) -> bool {
+        self.all_chars().contains(c)
     }
 }
 
@@ -399,22 +404,22 @@ impl Calculator {
         }
     }
 
-    fn get_token_type_at_pos(&mut self, pos: u16) -> Option<CalcToken> {
+    fn get_token_type_at_pos(&mut self, pos: u16) -> Option<CalcCharToken> {
         // to get Nth char, first skip N chars
         let pos_char = match self.calc.chars().skip(pos as usize).next() {
             Some(c) => c,
             None => { return None; }
         };
-        if CalcToken::Digit.all_chars().contains(pos_char) {
-            return Some(CalcToken::Digit);
-        } else if CalcToken::Dot.all_chars().contains(pos_char) {
-            return Some(CalcToken::Dot);
-        } else if CalcToken::Space.all_chars().contains(pos_char) {
-            return Some(CalcToken::Space);
-        } else if CalcToken::Operator.all_chars().contains(pos_char) {
-            return Some(CalcToken::Operator);
-        } else if CalcToken::Paren.all_chars().contains(pos_char) {
-            return Some(CalcToken::Paren);
+        if CalcCharToken::Digit.matches_char(pos_char) {
+            return Some(CalcCharToken::Digit);
+        } else if CalcCharToken::Dot.matches_char(pos_char) {
+            return Some(CalcCharToken::Dot);
+        } else if CalcCharToken::Space.matches_char(pos_char) {
+            return Some(CalcCharToken::Space);
+        } else if CalcCharToken::Operator.matches_char(pos_char) {
+            return Some(CalcCharToken::Operator);
+        } else if CalcCharToken::Paren.matches_char(pos_char) {
+            return Some(CalcCharToken::Paren);
         } else {
             return None;
         }
