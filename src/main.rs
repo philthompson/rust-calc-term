@@ -5,6 +5,12 @@ use termion::input::TermRead;
 use termion::raw::IntoRawMode;
 use eval::{eval, Value};
 
+// TODO: fix precision of decimals somehow:
+//     5.1 * 3 = 15.299999999999999
+// the perhaps more egregious:
+//     0.1 + 0.2 = 0.30000000000000004
+//     was fixed by rounding results with format!({:.12})
+
 enum CalcKey {
     Key(char),
     Delete
@@ -14,6 +20,27 @@ enum CalcResult {
     Float(f64),
     Integer(i64),
     Error(String)
+}
+
+#[derive(PartialEq)]
+enum CalcToken {
+    Digit,
+    Dot,
+    Space,
+    Operator,
+    Paren
+}
+
+impl CalcToken {
+    fn all_chars(&self) -> &str {
+        match *self {
+            CalcToken::Digit => "0123456789",
+            CalcToken::Dot => ".",
+            CalcToken::Space => " ",
+            CalcToken::Operator => "+-*/",
+            CalcToken::Paren => "()"
+        }
+    }
 }
 
 struct Calculator {
@@ -33,7 +60,11 @@ fn main() {
         color::Bg(color::Reset),
         color::Fg(color::Reset));
     let help_text_long: String = format!(
-        "{}{}Type an expression, like \"355/113\" or \"(9+8)/(7+6)\" and hit return!\n\rprevious calculations: [←↑↓→: select] [space: use selected] [pgdn/pgup: show more/fewer prevs]\n\rediting: [home/end: move]\n\rother: [h: hide help] [ctrl+q: quit]{}{}",
+        "{}{}\
+Type an expression, like \"355/113\" or \"(9+8)/(7+6)\" and hit return!\n\r\
+previous calculations: [←↑↓→: select] [space: use selected] [a/z: show fewer/more prevs]\n\r\
+editing: [q/r: move to beg/end] [w/e: jump left/right to item edge]\n\r\
+other: [h: hide help] [ctrl+q: quit]{}{}",
         color::Bg(color::AnsiValue::grayscale(5)),
         color::Fg(color::AnsiValue::grayscale(11)),
         color::Bg(color::Reset),
@@ -91,12 +122,12 @@ fn main() {
                 }
             },
             Key::Backspace => calc.append_key_to_calc(&CalcKey::Delete),
-            Key::PageDown => {
+            Key::Char('z') => {
                 if history_items < 100 && usize::from(history_items) < calc.prev_calcs.len() {
                     history_items += 1;
                 }
             },
-            Key::PageUp => {
+            Key::Char('a') => {
                 if !calc.prev_calcs.is_empty() {
                     if usize::from(history_items) > calc.prev_calcs.len() {
                         while usize::from(history_items) >= calc.prev_calcs.len() {
@@ -115,25 +146,13 @@ fn main() {
                 }
             },
             Key::Left => {
-                if calc.selected_calc == 0 {
-                    if calc.calc_pos > 0 {
-                        calc.calc_pos -= 1;
-                    }
-                } else {
-                    calc.selected_equals = false;
-                }
+                calc.move_cursor_left();
             },
             Key::Right => {
-                if calc.selected_calc == 0 {
-                    if usize::from(calc.calc_pos) < calc.calc.len() {
-                        calc.calc_pos += 1;
-                    }
-                } else {
-                    calc.selected_equals = true;
-                }
+                calc.move_cursor_right();
             },
-            Key::Home => calc.move_cursor_home(),
-            Key::End => calc.move_cursor_end(),
+            Key::Char('q') => calc.move_cursor_home(),
+            Key::Char('r') => calc.move_cursor_end(),
             Key::Up => {
                 if calc.selected_calc > 0 {
                     calc.selected_calc -= 1;
@@ -146,6 +165,8 @@ fn main() {
                 }
             }
             Key::Char('\n') => calc.perform_calculation(),
+            Key::Char('w') => calc.move_cursor_left_token(),
+            Key::Char('e') => calc.move_cursor_right_token(),
             //x => { calc.calc = format!("{:?}", x); }
             _ => ()
         }
@@ -265,7 +286,12 @@ impl Calculator {
         let mut formatted = String::from("");
 
         let formatted_output = match &output {
-            CalcResult::Float(value) => value.to_string(),
+            CalcResult::Float(value) => {
+                String::from(
+                    format!("{:.12}", value.to_string())
+                        .trim_end_matches('0')
+                )
+            }
             CalcResult::Integer(value) => value.to_string(),
             CalcResult::Error(string) => String::from(string)
         };
@@ -288,6 +314,26 @@ impl Calculator {
         self.move_cursor_end();
     }
 
+    fn move_cursor_left(&mut self) {
+       if self.selected_calc == 0 {
+            if self.calc_pos > 0 {
+                self.calc_pos -= 1;
+            }
+        } else {
+            self.selected_equals = false;
+        }
+    }
+
+    fn move_cursor_right(&mut self) {
+        if self.selected_calc == 0 {
+            if usize::from(self.calc_pos) < self.calc.len() {
+                self.calc_pos += 1;
+            }
+        } else {
+            self.selected_equals = true;
+        }
+    }
+
     fn move_cursor_home(&mut self) {
         self.selected_calc = 0;
         self.selected_equals = false;
@@ -299,6 +345,78 @@ impl Calculator {
         self.move_cursor_home();
         while usize::from(self.calc_pos) < self.calc.len() {
             self.calc_pos += 1;
+        }
+    }
+
+    // get the type of token the cursor is at, then move left
+    //   until the type of token changes
+    // if there are any errors accessing the character at a position
+    //   or matching things we can just return and not move the cursor
+    fn move_cursor_left_token(&mut self) {
+        if self.calc_pos as usize == self.calc.len() {
+            self.move_cursor_left();
+        }
+        let start_token = match self.get_token_type_at_pos(self.calc_pos) {
+            Some(t) => t,
+            None => { return; }
+        };
+        let mut have_moved = false;
+        while self.calc_pos > 0 {
+            let pos_token = match self.get_token_type_at_pos(self.calc_pos - 1) {
+                Some(t) => t,
+                None => { return; }
+            };
+            if start_token != pos_token {
+                if !have_moved {
+                    self.move_cursor_left();
+                }
+                return;
+            }
+            have_moved = true;
+            self.move_cursor_left();
+        }
+    }
+
+    fn move_cursor_right_token(&mut self) {
+        let start_token = match self.get_token_type_at_pos(self.calc_pos) {
+            Some(t) => t,
+            None => { return; }
+        };
+        let mut have_moved = false;
+        while (self.calc_pos as usize) < self.calc.len() {
+            let pos_token = match self.get_token_type_at_pos(self.calc_pos + 1) {
+                Some(t) => t,
+                None => { return; }
+            };
+            if start_token != pos_token {
+                if !have_moved {
+                    self.move_cursor_right();
+                }
+                return;
+            }
+            have_moved = true;
+            self.move_cursor_right();
+        }
+    }
+
+    fn get_token_type_at_pos(&mut self, pos: u16) -> Option<CalcToken> {
+        // to get Nth char, first skip N chars
+        let pos_char = match self.calc.chars().skip(pos as usize).next() {
+            Some(c) => c,
+            None => { return None; }
+        };
+        if CalcToken::Digit.all_chars().contains(pos_char) {
+            return Some(CalcToken::Digit);
+        } else if CalcToken::Dot.all_chars().contains(pos_char) {
+            return Some(CalcToken::Dot);
+        } else if CalcToken::Space.all_chars().contains(pos_char) {
+            return Some(CalcToken::Space);
+        } else if CalcToken::Operator.all_chars().contains(pos_char) {
+            return Some(CalcToken::Operator);
+        } else if CalcToken::Paren.all_chars().contains(pos_char) {
+            return Some(CalcToken::Paren);
+        } else {
+            return None;
         }
     }
 }
