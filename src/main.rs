@@ -531,7 +531,9 @@ impl Calculator {
                 }
                 token.clear();
                 last_token_type = CalcParseToken::Value;
-            } else if last_token_type != token_type {
+            // start a new token if token types are different, or if it's any
+            //   type aside from value (digits can repeat, but parens and operators cannot)
+            } else if last_token_type != token_type || token_type != CalcParseToken::Value {
                 if !token.is_empty() {
                     tokens.push(token.clone());
                 }
@@ -544,7 +546,7 @@ impl Calculator {
         return tokens;
     }
 
-    fn build_calc_eval_tree(calc: &str) -> Result<Tree<CalcEvalItem>, &str> {
+    fn build_calc_eval_tree(calc: &str) -> Result<Tree<CalcEvalItem>, String> {
         let mut tree = Tree::<CalcEvalItem>::new();
 
         let tokens = Calculator::parse_calc_to_tokens(calc);
@@ -554,9 +556,7 @@ impl Calculator {
         for token in tokens.iter() {
             let token_type = CalcParseToken::get_token_matching_str(token);
             if token_type.is_none() {
-                // TODO: how to return a newly-created string?
-                //return Err(format!("unknown token: [{}]", token).as_str());
-                return Err("unknown token");
+                return Err(format!("unknown token: [{}]", token));
             }
             let token_type = token_type.unwrap();
             match token_type {
@@ -567,16 +567,16 @@ impl Calculator {
                         Some(c) => {
                             let cursor_node = match tree.node_at_mut(c) {
                                 Some(n) => n,
-                                None => { return Err("no node exists at cursor index location"); }
+                                None => { return Err("no node exists at cursor index location".to_string()); }
                             };
                             match cursor_node.value.token_type {
-                                CalcParseToken::Value => { return Err("cannot have two consecutive values: expected an operation or open paren"); },
+                                CalcParseToken::Value => { return Err("cannot have two consecutive values: expected an operation or open paren".to_string()); },
                                 CalcParseToken::Operator => {
                                     if !cursor_node.has_left() {
-                                        return Err("cursor is an operator without a left hand side value");
+                                        return Err("cursor is an operator without a left hand side value".to_string());
                                     }
                                     if tree.set_node_child(c, val_node_idx, ChildSide::Right).is_err() {
-                                        return Err("unable to set value as operator operand");
+                                        return Err("unable to set value as operator operand".to_string());
                                     }
                                     // for consistency, always move the cursor to the node that was
                                     //   last added to the tree
@@ -588,15 +588,15 @@ impl Calculator {
                                     //   be at a ")" not a "(" -- therefore checking for a left child is
                                     //   probably not necessary
                                     if cursor_node.has_left() {
-                                        return Err("cursor is an open paren that already has a child value");
+                                        return Err("cursor is an open paren that already has a child value".to_string());
                                     }
                                     if tree.set_node_child(c, val_node_idx, ChildSide::Left).is_err() {
-                                        return Err("unable to set value as child of an open paren");
+                                        return Err("unable to set value as child of an open paren".to_string());
                                     }
                                     cursor = val_node_idx;
                                 },
                                 CalcParseToken::CloseParen => {
-                                    return Err("expected an operator, not a value, since the cursor was at a close paren");
+                                    return Err("expected an operator, not a value, since the cursor was at a close paren".to_string());
                                 }
                             }
                         },
@@ -610,14 +610,14 @@ impl Calculator {
                     let op_node_idx = Some(tree.add_node(TreeNode::new(
                         CalcEvalItem::new(token_type, token))));
                     if cursor.is_none() || !tree.has_root() {
-                        return Err("the first token cannot be an operator");
+                        return Err("the first token cannot be an operator".to_string());
                     }
                     let cursor_loc = cursor.unwrap();
                     match token.as_str() {
                         "*" | "/" => {
                             let cursor_node = match tree.node_at(cursor_loc) {
                                 Some(n) => n,
-                                None => { return Err("no node exists at cursor index location"); }
+                                None => { return Err("no node exists at cursor index location".to_string()); }
                             };
                             match cursor_node.value.token_type {
                                 // the "*/" operators have precedence, so they are inserted at the
@@ -631,13 +631,13 @@ impl Calculator {
                                         let result = tree.replace_root_with_node(
                                             op_node_idx.unwrap(), ChildSide::Left);
                                         if result.is_err() {
-                                            return Err("unable to replace root with operator node");
+                                            return Err("unable to replace root with operator node".to_string());
                                         }
                                         cursor = op_node_idx;
                                     } else {
                                         let result = tree.insert_node_above_node(cursor_loc, op_node_idx.unwrap(), ChildSide::Left);
                                         if result.is_err() {
-                                            return Err("unable to insert new operator node in place of an existing value node");
+                                            return Err("unable to insert new operator node in place of an existing value node".to_string());
                                         }
                                         cursor = op_node_idx;
                                     }
@@ -647,21 +647,21 @@ impl Calculator {
                                     //   (whether it be a value, operator, or paren), it must be an
                                     //   error if the cursor is at an operator when another operator
                                     //   is the next token
-                                    return Err("cannot have two consecutive operators: expected a value or open paren");
+                                    return Err("cannot have two consecutive operators: expected a value or open paren".to_string());
                                 },
                                 CalcParseToken::OpenParen => {
                                     // now that the cursor is always set to the last inserted node
                                     //   (whether it be a value, operator, or paren), it must be an
                                     //   error if the cursor is at an open paren when another operator
                                     //   is the next token
-                                    return Err("cannot have an operator following an open paren: expected a value or open paren");
+                                    return Err("cannot have an operator following an open paren: expected a value or open paren".to_string());
                                 }
                             }
                         },
                         "+" | "-" => {
                             let cursor_node = match tree.node_at(cursor_loc) {
                                 Some(n) => n,
-                                None => { return Err("no node exists at cursor index location"); }
+                                None => { return Err("no node exists at cursor index location".to_string()); }
                             };
                             match cursor_node.value.token_type {
                                 CalcParseToken::Value | CalcParseToken::CloseParen => {
@@ -675,12 +675,12 @@ impl Calculator {
                                     while !tree.matches_root(insert_loc) {
                                         let insert_loc_parent_loc = tree.get_node_parent(insert_loc);
                                         if insert_loc_parent_loc.is_none() {
-                                            return Err("a node that isn't the root has no parent");
+                                            return Err("a node that isn't the root has no parent".to_string());
                                         }
                                         let insert_loc_parent_loc = insert_loc_parent_loc.unwrap();
                                         let insert_loc_parent = match tree.node_at(insert_loc_parent_loc) {
                                             Some(n) => n,
-                                            None => { return Err("no node exists at a node's parent's location"); }
+                                            None => { return Err("no node exists at a node's parent's location".to_string()); }
                                         };
                                         match insert_loc_parent.value.token_type {
                                             // if the parent is an "(" then stop here
@@ -698,13 +698,13 @@ impl Calculator {
                                         let result = tree.replace_root_with_node(
                                             op_node_idx.unwrap(), ChildSide::Left);
                                         if result.is_err() {
-                                            return Err("unable to replace root with operator node");
+                                            return Err("unable to replace root with operator node".to_string());
                                         }
                                         cursor = op_node_idx;
                                     } else {
                                         let result = tree.insert_node_above_node(insert_loc, op_node_idx.unwrap(), ChildSide::Left);
                                         if result.is_err() {
-                                            return Err("unable to insert new operator node in place of an existing value node");
+                                            return Err("unable to insert new operator node in place of an existing value node".to_string());
                                         }
                                         cursor = op_node_idx;
                                     }
@@ -714,20 +714,18 @@ impl Calculator {
                                     //   (whether it be a value, operator, or paren), it must be an
                                     //   error if the cursor is at an operator when another operator
                                     //   is the next token
-                                    return Err("cannot have two consecutive operators: expected a value or open paren");
+                                    return Err("cannot have two consecutive operators: expected a value or open paren".to_string());
                                 },
                                 CalcParseToken::OpenParen => {
                                     // now that the cursor is always set to the last inserted node
                                     //   (whether it be a value, operator, or paren), it must be an
                                     //   error if the cursor is at an open paren when another operator
                                     //   is the next token
-                                    return Err("cannot have an operator following an open paren: expected a value or open paren");
+                                    return Err("cannot have an operator following an open paren: expected a value or open paren".to_string());
                                 }
                             }
                         },
-                        // TODO: how to return a newly-created string?
-                        //_ => { return Err(format!("unknown operator [{}]", token).as_str()); }
-                        _ => { return Err("unknown operator"); }
+                        _ => { return Err(format!("unknown operator [{}]", token)); }
                     }
                 },
                 CalcParseToken::OpenParen => {
@@ -740,15 +738,17 @@ impl Calculator {
                             // if the cursor is at an op node with left set, set op right to this
                             let cursor_node = match tree.node_at_mut(c) {
                                 Some(n) => n,
-                                None => { return Err("improve this error message"); }
+                                None => { return Err("improve this error message".to_string()); }
                             };
                             match cursor_node.value.token_type {
-                                CalcParseToken::Value => { return Err("expected an operator or close paren, not an open paren, since the last token was a value"); },
+                                CalcParseToken::Value => { return Err("expected an operator or close paren, not an open paren, since the last token was a value".to_string()); },
                                 CalcParseToken::Operator => {
                                     if !cursor_node.has_left() {
-                                        return Err("the previous token was an operator, which should already have a left-hand side operand");
+                                        return Err("the previous token was an operator, which should already have a left-hand side operand".to_string());
                                     }
-                                    tree.set_node_child(c, paren_node_idx, ChildSide::Right);
+                                    if tree.set_node_child(c, paren_node_idx, ChildSide::Right).is_err() {
+                                        return Err("unable to set open paren as right child of an operator".to_string());
+                                    }
                                     cursor = paren_node_idx;
                                 },
                                 CalcParseToken::OpenParen => {
@@ -756,13 +756,15 @@ impl Calculator {
                                     //   already have a left child (since this new token is
                                     //   another paren)
                                     if cursor_node.has_left() {
-                                        return Err("the previous token was an open paren, which should not already have any child nodes");
+                                        return Err("the previous token was an open paren, which should not already have any child nodes".to_string());
                                     }
-                                    tree.set_node_child(c, paren_node_idx, ChildSide::Left);
+                                    if tree.set_node_child(c, paren_node_idx, ChildSide::Left).is_err() {
+                                        return Err("unable to set open paren as left child of the previous open paren".to_string());
+                                    }
                                     cursor = paren_node_idx;
                                 },
                                 CalcParseToken::CloseParen => {
-                                    return Err("a close paren cannot immediately be followed by an open paren");
+                                    return Err("a close paren cannot immediately be followed by an open paren".to_string());
                                 }
                             }
                         },
@@ -782,7 +784,7 @@ impl Calculator {
                     //   tree with a traversal?
 
                     if cursor.is_none() || !tree.has_root() {
-                        return Err("the first token cannot be a closed paren");
+                        return Err("the first token cannot be a closed paren".to_string());
                     }
                     let cursor_loc = cursor.unwrap();
 
@@ -826,12 +828,12 @@ impl Calculator {
                     while !tree.matches_root(reverse_cursor_loc) {
                         let parent_loc = tree.get_node_parent(reverse_cursor_loc);
                         if parent_loc.is_none() {
-                            return Err("a node that isn't the root has no parent");
+                            return Err("a node that isn't the root has no parent".to_string());
                         }
                         reverse_cursor_loc = parent_loc.unwrap();
                         let open_paren_node = match tree.node_at(reverse_cursor_loc) {
                             Some(n) => n,
-                            None => { return Err("no node exists at a node's parent's location"); }
+                            None => { return Err("no node exists at a node's parent's location".to_string()); }
                         };
                         match open_paren_node.value.token_type {
                             // if the parent is an "(" then stop here
@@ -840,7 +842,7 @@ impl Calculator {
                             },
                             CalcParseToken::Operator => {
                                 if !open_paren_node.has_left() || !open_paren_node.has_right() {
-                                    return Err("close paren not expected because previous operator node does not have two operands");
+                                    return Err("close paren not expected because previous operator node does not have two operands".to_string());
                                 }
                             },
                             CalcParseToken::Value | CalcParseToken::CloseParen => ()
@@ -848,16 +850,17 @@ impl Calculator {
                     }
                     let open_paren_node = match tree.node_at_mut(reverse_cursor_loc) {
                         Some(n) => n,
-                        None => { return Err("no node exists at found nearest open paren"); }
+                        None => { return Err("no node exists at found nearest open paren".to_string()); }
                     };
                     match open_paren_node.value.token_type {
                         CalcParseToken::OpenParen => {
                             // change open paren to a close paren
                             open_paren_node.value = CalcEvalItem::new(token_type, token);
+                            cursor = Some(reverse_cursor_loc);
                         },
                         _ => {
                             // handle the case where we hit the root before finding an open paren
-                            return Err("no corresponding open paren token found for the new close paren");
+                            return Err("no corresponding open paren token found for the new close paren".to_string());
                         }
                     }
                 }
@@ -914,6 +917,41 @@ mod tests {
     #[test]
     fn tokenize_paren_then_subtract() {
         assert_eq!(vec!["(", "1", ")", "-", "1"], Calculator::parse_calc_to_tokens("(1)-1"));
+    }
+
+    #[test]
+    fn tokenize_nested_paren() {
+        assert_eq!(vec!["(","(","1","*","2",")","*","3",")"], Calculator::parse_calc_to_tokens("((1*2)*3)"));
+    }
+
+    #[test]
+    fn tokenize_not_starting_nested_paren() {
+        assert_eq!(vec!["1","+","(","(","2",")",")"], Calculator::parse_calc_to_tokens("1+((2))"));
+    }
+
+    #[test]
+    fn tokenize_double_plus() {
+        assert_eq!(vec!["1","+","+","2"], Calculator::parse_calc_to_tokens("1++2"));
+    }
+
+    #[test]
+    fn tokenize_double_times() {
+        assert_eq!(vec!["1","*","*","2"], Calculator::parse_calc_to_tokens("1**2"));
+    }
+
+    #[test]
+    fn tokenize_double_divide() {
+        assert_eq!(vec!["1","/","/","2"], Calculator::parse_calc_to_tokens("1//2"));
+    }
+
+    #[test]
+    fn tokenize_minus_plus() {
+        assert_eq!(vec!["1","-","+","2"], Calculator::parse_calc_to_tokens("1-+2"));
+    }
+
+    #[test]
+    fn tokenize_multiply_divide() {
+        assert_eq!(vec!["1","*","/","2"], Calculator::parse_calc_to_tokens("1*/2"));
     }
 
     #[test]
@@ -1217,6 +1255,30 @@ mod tests {
             output.push(&node.value.string_value);
         }
         assert_eq!(vec!["1","2","+","("], output);
+    }
+
+    #[test]
+    fn build_tree_two_parens_then_multiply() {
+        let tree = Calculator::build_calc_eval_tree("(1+2) + (3+4)*5").unwrap();
+        let mut output = Vec::<&str>::new();
+        let mut postorder = PostOrderIter::new(&tree);
+        while let Some(index) = postorder.next() {
+            let node = tree.node_at(index).expect("Node does not exist at given index");
+            output.push(&node.value.string_value);
+        }
+        assert_eq!(vec!["1","2","+",")","3","4","+",")","5","*","+"], output);
+    }
+
+    #[test]
+    fn build_tree_nested_parens() {
+        let tree = Calculator::build_calc_eval_tree("((1+2)*(3+4))/5").unwrap();
+        let mut output = Vec::<&str>::new();
+        let mut postorder = PostOrderIter::new(&tree);
+        while let Some(index) = postorder.next() {
+            let node = tree.node_at(index).expect("Node does not exist at given index");
+            output.push(&node.value.string_value);
+        }
+        assert_eq!(vec!["1","2","+",")","3","4","+",")","*",")","5","/"], output);
     }
 
     // add tets for invalid inputs for get_token_matching_str()
