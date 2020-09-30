@@ -533,6 +533,10 @@ impl Calculator {
                 last_token_type = CalcParseToken::Value;
             // start a new token if token types are different, or if it's any
             //   type aside from value (digits can repeat, but parens and operators cannot)
+            } else if token_type == CalcParseToken::Value && token == "-" &&
+                    !tokens.is_empty() &&
+                    CalcParseToken::get_token_matching_str(tokens.as_slice().last().unwrap()).unwrap() == CalcParseToken::Operator {
+                // do nothing: append value (done below) to previous "-" to make it a negative value
             } else if last_token_type != token_type || token_type != CalcParseToken::Value {
                 if !token.is_empty() {
                     tokens.push(token.clone());
@@ -952,6 +956,11 @@ mod tests {
     #[test]
     fn tokenize_multiply_divide() {
         assert_eq!(vec!["1","*","/","2"], Calculator::parse_calc_to_tokens("1*/2"));
+    }
+
+    #[test]
+    fn tokenize_triple_minus() {
+        assert_eq!(vec!["1","-","-","-2"], Calculator::parse_calc_to_tokens("1---2"));
     }
 
     #[test]
