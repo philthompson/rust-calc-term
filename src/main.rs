@@ -872,6 +872,53 @@ impl Calculator {
         }
         return Ok(tree);
     }
+
+    fn evaluate_calc(calc: &str) -> Result<String, String> {
+        let tree = match Calculator::build_calc_eval_tree(calc) {
+            Ok(t) => t,
+            Err(m) => { return Err(m); }
+        };
+
+        let mut eval_stack = Vec::<f64>::new();
+        let mut postorder = PostOrderIter::new(&tree);
+        while let Some(index) = postorder.next() {
+            let node = match tree.node_at(index) {
+                Some(n) => n,
+                None => { return Err("Node does not exist at given index".to_string()); }
+            };
+            let token_type = match CalcParseToken::get_token_matching_str(&node.value.string_value) {
+                Some(t) => t,
+                None => { return Err(format!("Unknown token type for token [{}]", &node.value.string_value)); }
+            };
+            if token_type == CalcParseToken::Value {
+                match node.value.string_value.parse::<f64>() {
+                    Ok(f) => { eval_stack.push(f); },
+                    Err(_) => { return Err(format!("Unable to parse value [{}] into a floating point", &node.value.string_value)); }
+                }
+            } else if token_type == CalcParseToken::Operator {
+                if eval_stack.len() < 2 {
+                    return Err(format!("cannot perform operation [{}] with only one value on the stack", &node.value.string_value));
+                }
+                let val_right = eval_stack.pop().unwrap();
+                let val_left = eval_stack.pop().unwrap();
+                let result = match node.value.string_value.as_str() {
+                    "+" => val_left + val_right,
+                    "-" => val_left - val_right,
+                    "*" => val_left * val_right,
+                    "/" => val_left / val_right,
+                    _ => { return Err(format!("cannot perform unknown operation [{}]", &node.value.string_value)); }
+                };
+                eval_stack.push(result);
+            }
+        }
+        if eval_stack.len() > 1 {
+            return Err("Extraneous value(s) remain on the stack after perfoming the evaluation".to_string());
+        }
+        if eval_stack.len() == 0 {
+            return Err("No final result value is on the stack after perfoming the evaluation".to_string());
+        }
+        return Ok(eval_stack.pop().unwrap().to_string());
+    }
 }
 
 #[cfg(test)]
@@ -1288,6 +1335,36 @@ mod tests {
             output.push(&node.value.string_value);
         }
         assert_eq!(vec!["1","2","+",")","3","4","+",")","*",")","5","/"], output);
+    }
+
+    #[test]
+    fn evaluate_simple_add() {
+        let result = Calculator::evaluate_calc("1+1").unwrap();
+        assert_eq!("2", result);
+    }
+
+    #[test]
+    fn evaluate_simple_subtract() {
+        let result = Calculator::evaluate_calc("1-2").unwrap();
+        assert_eq!("-1", result);
+    }
+
+    #[test]
+    fn evaluate_simple_multiply() {
+        let result = Calculator::evaluate_calc("2*2").unwrap();
+        assert_eq!("4", result);
+    }
+
+    #[test]
+    fn evaluate_simple_divide() {
+        let result = Calculator::evaluate_calc("6/2").unwrap();
+        assert_eq!("3", result);
+    }
+
+    #[test]
+    fn evaluate_nested_parens() {
+        let result = Calculator::evaluate_calc("((1+2)*(3+4))/7").unwrap();
+        assert_eq!("3", result);
     }
 
     // add tets for invalid inputs for get_token_matching_str()
