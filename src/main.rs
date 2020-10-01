@@ -206,6 +206,8 @@ other: [h: hide help] [ctrl+q: quit]{}{}",
             Key::Char('(') => calc.append_key_to_calc(&CalcKey::Key('(')),
             Key::Char(')') => calc.append_key_to_calc(&CalcKey::Key(')')),
             Key::Char('.') => calc.append_key_to_calc(&CalcKey::Key('.')),
+            Key::Char(',') => calc.append_key_to_calc(&CalcKey::Key(',')),
+            Key::Char('$') => calc.append_key_to_calc(&CalcKey::Key('$')),
             Key::Char('h') => {
                 is_help_requested = !is_help_requested;
                 if is_help_requested {
@@ -415,7 +417,8 @@ impl Calculator {
     }
 
     fn perform_calc_js_eval(calc: &str) -> CalcResult {
-        match eval(calc) {
+        let calc_clean = calc.replace("$", "").replace(",", "");
+        match eval(&calc_clean) {
             Ok(value) => match value {
                 Value::Number(number) => {
                     if number.is_i64() || number.is_u64() {
@@ -588,7 +591,7 @@ impl Calculator {
     }
 
     fn parse_calc_to_tokens(calc: &str) -> Vec<String> {
-        let calc_no_space = calc.replace(" ", "");
+        let calc_no_space = calc.replace(" ", "").replace("$", "").replace(",", "");
         if calc_no_space.len() == 0 {
             return vec![];
         }
@@ -1424,6 +1427,18 @@ mod tests {
             output.push(&node.value.string_value);
         }
         assert_eq!(vec!["1","2","+",")","3","4","+",")","*",")","5","/"], output);
+    }
+
+    #[test]
+    fn build_tree_commas_spaces_and_dollar_signs() {
+        let tree = Calculator::build_calc_eval_tree("$1,000 * .25 + 22").unwrap();
+        let mut output = Vec::<&str>::new();
+        let mut postorder = PostOrderIter::new(&tree);
+        while let Some(index) = postorder.next() {
+            let node = tree.node_at(index).expect("Node does not exist at given index");
+            output.push(&node.value.string_value);
+        }
+        assert_eq!(vec!["1000",".25","*","22","+"], output);
     }
 
     #[test]
