@@ -9,12 +9,16 @@ use rust_calc_term::tree::Tree;
 use rust_calc_term::tree::TreeNode;
 use rust_calc_term::tree::PostOrderIter;
 use rust_calc_term::tree::ChildSide;
+use bigdecimal::BigDecimal;
+use std::str::FromStr;
 
 // TODO: fix precision of decimals somehow:
 //     5.1 * 3 = 15.299999999999999
 // the perhaps more egregious:
 //     0.1 + 0.2 = 0.30000000000000004
 //     was fixed by rounding results with format!({:.12})
+
+// interesting test (should be unit test?) (123*.1+0.5)/5.1
 
 enum CalcKey {
     Key(char),
@@ -351,7 +355,67 @@ impl Calculator {
 
     fn perform_calculation(&mut self) {
         let calc_copy = self.calc.clone();
-        let calc_equals = match eval(&self.calc) {
+        let js_result = Calculator::perform_calc_js_eval(&self.calc);
+        let tree_result = Calculator::perform_calc_eval(&self.calc);
+        let js_result_float = match js_result {
+            CalcResult::Float(f) => Ok(f),
+            CalcResult::Integer(i) => {
+                match i.to_string().parse::<f64>() {
+                    Ok(x) => Ok(x),
+                    Err(_) => Err("unable to parse int to float".to_string())
+                }
+            },
+            // TODO: allow the original error message to be passed through here
+            //CalcResult::Error(e) => Err(e)
+            CalcResult::Error(_) => Err("error".to_string())
+        };
+        let tree_result_float = match tree_result {
+            CalcResult::Float(f) => Ok(f),
+            CalcResult::Integer(i) => {
+                match i.to_string().parse::<f64>() {
+                    Ok(x) => Ok(x),
+                    Err(_) => Err("unable to parse int to float".to_string())
+                }
+            },
+            // TODO: allow the original error message to be passed through here
+            //CalcResult::Error(e) => Err(e)
+            CalcResult::Error(_) => Err("error".to_string())
+        };
+
+        let mut sanity_check_compare_success = false;
+        if js_result_float.is_err() && tree_result_float.is_err() {
+            self.prev_calcs.push(("calculations using bigdecimal tree post order, and eval, could not be cast to floats for sanity check comparison".to_string(), CalcResult::Error("error".to_string())));
+        } else if js_result_float.is_ok() && tree_result_float.is_err() {
+            self.prev_calcs.push(("calculation using bigdecimal tree post order could not be cast to float for sanity check comparison".to_string(), CalcResult::Error("error".to_string())));
+        } else if js_result_float.is_err() && tree_result_float.is_ok() {
+            self.prev_calcs.push(("calculation using eval could not be cast to float for sanity check comparison".to_string(), CalcResult::Error("error".to_string())));
+        } else if js_result_float.is_ok() && tree_result_float.is_ok() {
+            if Calculator::is_within_acceptable_range(js_result_float.unwrap(), tree_result_float.unwrap()) {
+                sanity_check_compare_success = true;
+            } else {
+                self.prev_calcs.push(("calculations using bigdecimal tree post order, and eval, do not match".to_string(), CalcResult::Error("error".to_string())));
+            }
+        }
+        if sanity_check_compare_success {
+            self.prev_calcs.push((calc_copy, tree_result));
+        } else {
+            let error_message = self.prev_calcs.pop();
+            self.prev_calcs.push((format!("eval: {}", calc_copy), js_result));
+            self.prev_calcs.push((format!("bigdecimal tree: {}", calc_copy), tree_result));
+            if error_message.is_some() {
+                self.prev_calcs.push(error_message.unwrap());
+            }
+        }
+
+        while self.prev_calcs.len() > 1000 {
+            self.prev_calcs.remove(0);
+        }
+        self.calc.clear();
+        self.calc_pos = 0;
+    }
+
+    fn perform_calc_js_eval(calc: &str) -> CalcResult {
+        match eval(calc) {
             Ok(value) => match value {
                 Value::Number(number) => {
                     if number.is_i64() || number.is_u64() {
@@ -363,13 +427,35 @@ impl Calculator {
                 _ => CalcResult::Error(String::from("error")),
             },
             _ => CalcResult::Error(String::from("error"))
-        };
-        self.prev_calcs.push((calc_copy, calc_equals));
-        while self.prev_calcs.len() > 1000 {
-            self.prev_calcs.remove(0);
         }
-        self.calc.clear();
-        self.calc_pos = 0;
+    }
+
+    fn is_within_acceptable_range(a: f64, b: f64) -> bool {
+        let ratio = if a > b {
+            b / a
+        } else {
+            a / b
+        };
+        ratio > 0.9999
+    }
+
+    fn perform_calc_eval(calc: &str) -> CalcResult {
+        match Calculator::evaluate_calc(calc) {
+            Ok(string_value) => {
+                if string_value.contains(".") {
+                    match string_value.parse::<f64>() {
+                        Ok(f) => CalcResult::Float(f),
+                        Err(_) => CalcResult::Error(format!("unable to parse value [{}] to float", string_value))
+                    }
+                } else {
+                    match string_value.parse::<i64>() {
+                        Ok(i) => CalcResult::Integer(i),
+                        Err(_) => CalcResult::Error(format!("unable to parse value [{}] to integer", string_value))
+                    }
+                }
+            },
+            Err(error_message) => CalcResult::Error(error_message)
+        }
     }
 
     fn format_prev_calculation(output: &CalcResult) -> String {
@@ -377,10 +463,13 @@ impl Calculator {
 
         let formatted_output = match &output {
             CalcResult::Float(value) => {
-                String::from(
-                    format!("{:.12}", value.to_string())
-                        .trim_end_matches('0')
-                )
+                value.to_string()
+                // now that BigDecimal is used, we no longer need to round the displayed values
+                //   to "fix" floating point math shortcomings
+                //String::from(
+                //    format!("{:.12}", value.to_string())
+                //        .trim_end_matches('0')
+                //)
             }
             CalcResult::Integer(value) => value.to_string(),
             CalcResult::Error(string) => String::from(string)
@@ -879,7 +968,7 @@ impl Calculator {
             Err(m) => { return Err(m); }
         };
 
-        let mut eval_stack = Vec::<f64>::new();
+        let mut eval_stack = Vec::<BigDecimal>::new();
         let mut postorder = PostOrderIter::new(&tree);
         while let Some(index) = postorder.next() {
             let node = match tree.node_at(index) {
@@ -891,9 +980,9 @@ impl Calculator {
                 None => { return Err(format!("Unknown token type for token [{}]", &node.value.string_value)); }
             };
             if token_type == CalcParseToken::Value {
-                match node.value.string_value.parse::<f64>() {
-                    Ok(f) => { eval_stack.push(f); },
-                    Err(_) => { return Err(format!("Unable to parse value [{}] into a floating point", &node.value.string_value)); }
+                match BigDecimal::from_str(&node.value.string_value) {
+                    Ok(x) => { eval_stack.push(x); },
+                    Err(_) => { return Err(format!("Unable to parse value [{}] into a BigDecimal", &node.value.string_value)); }
                 }
             } else if token_type == CalcParseToken::Operator {
                 if eval_stack.len() < 2 {
