@@ -3,7 +3,8 @@ use termion::color;
 use termion::event::Key;
 use termion::input::TermRead;
 use termion::raw::IntoRawMode;
-use eval::{eval, Value};
+use evalexpr::eval_float;
+use evalexpr::error::EvalexprResult;
 use rust_calc_term::tree::NodeIndex;
 use rust_calc_term::tree::Tree;
 use rust_calc_term::tree::TreeNode;
@@ -12,19 +13,12 @@ use rust_calc_term::tree::ChildSide;
 use bigdecimal::BigDecimal;
 use std::str::FromStr;
 
-// TODO: fix precision of decimals somehow:
-//     5.1 * 3 = 15.299999999999999
-// the perhaps more egregious:
-//     0.1 + 0.2 = 0.30000000000000004
-//     was fixed by rounding results with format!({:.12})
-
-// interesting test (should be unit test?) (123*.1+0.5)/5.1
-
 enum CalcKey {
     Key(char),
     Delete
 }
 
+#[derive(PartialEq, Debug)]
 enum CalcResult {
     Float(f64),
     Integer(i64),
@@ -386,23 +380,23 @@ impl Calculator {
 
         let mut sanity_check_compare_success = false;
         if js_result_float.is_err() && tree_result_float.is_err() {
-            self.prev_calcs.push(("calculations using bigdecimal tree post order, and eval, could not be cast to floats for sanity check comparison".to_string(), CalcResult::Error("error".to_string())));
+            self.prev_calcs.push(("calculations using bigdecimal tree post order, and evalexpr, could not be cast to floats for sanity check comparison".to_string(), CalcResult::Error("error".to_string())));
         } else if js_result_float.is_ok() && tree_result_float.is_err() {
             self.prev_calcs.push(("calculation using bigdecimal tree post order could not be cast to float for sanity check comparison".to_string(), CalcResult::Error("error".to_string())));
         } else if js_result_float.is_err() && tree_result_float.is_ok() {
-            self.prev_calcs.push(("calculation using eval could not be cast to float for sanity check comparison".to_string(), CalcResult::Error("error".to_string())));
+            self.prev_calcs.push(("calculation using evalexpr could not be cast to float for sanity check comparison".to_string(), CalcResult::Error("error".to_string())));
         } else if js_result_float.is_ok() && tree_result_float.is_ok() {
             if Calculator::is_within_acceptable_range(js_result_float.unwrap(), tree_result_float.unwrap()) {
                 sanity_check_compare_success = true;
             } else {
-                self.prev_calcs.push(("calculations using bigdecimal tree post order, and eval, do not match".to_string(), CalcResult::Error("error".to_string())));
+                self.prev_calcs.push(("calculations using bigdecimal tree post order, and evalexpr, do not match".to_string(), CalcResult::Error("error".to_string())));
             }
         }
         if sanity_check_compare_success {
             self.prev_calcs.push((calc_copy, tree_result));
         } else {
             let error_message = self.prev_calcs.pop();
-            self.prev_calcs.push((format!("eval: {}", calc_copy), js_result));
+            self.prev_calcs.push((format!("evalexpr: {}", calc_copy), js_result));
             self.prev_calcs.push((format!("bigdecimal tree: {}", calc_copy), tree_result));
             if error_message.is_some() {
                 self.prev_calcs.push(error_message.unwrap());
@@ -417,28 +411,70 @@ impl Calculator {
     }
 
     fn perform_calc_js_eval(calc: &str) -> CalcResult {
-        let calc_clean = calc.replace("$", "").replace(",", "");
-        match eval(&calc_clean) {
-            Ok(value) => match value {
-                Value::Number(number) => {
-                    if number.is_i64() || number.is_u64() {
-                        CalcResult::Integer(number.as_i64().unwrap())
-                    } else {
-                        CalcResult::Float(number.as_f64().unwrap())
-                    }
-                },
-                _ => CalcResult::Error(String::from("error")),
-            },
-            _ => CalcResult::Error(String::from("error"))
+        let calc_clean = calc.replace("$", "").replace(",", "").replace(" ","");
+        // replace all integer values with "integer value".0 below, to force
+        //   evalexp to use floating point math -- otherwise all-integer input
+        //   calculations are truncated to an integer result ("5/3 = 1"!)
+        let calc_float = Calculator::convert_integers_to_decimals(&calc_clean);
+        match eval_float(&calc_float) {
+            EvalexprResult::Ok(value) => CalcResult::Float(value),
+            //_ => CalcResult::Error(String::from("error"))
+            EvalexprResult::Err(error) => CalcResult::Error(format!("calc:[{}], error:[{:?}]", calc_float, error))
         }
     }
 
-    fn is_within_acceptable_range(a: f64, b: f64) -> bool {
+    // this is much less code than attempting to solve this problem with
+    //   regular expressions
+    fn convert_integers_to_decimals(calc: &str) -> String {
+        let digits = "0123456789";
+        let mut within_number = false;
+        let mut within_int = false;
+        let mut result = String::new();
+        for c in calc.chars() {
+            if digits.contains(c) {
+                if !within_number {
+                    within_number = true;
+                    within_int = true;
+                }
+            } else {
+                if within_int {
+                    if c != '.' {
+                        within_number = false;
+                        result.push('.');
+                        result.push('0');
+                    }
+                } else if c == '.' {
+                    within_number = true;
+                }
+                within_int = false;
+            }
+            result.push(c);
+        }
+        // if still within an int as the calc ends, add a final ".0"
+        if within_int {
+            result.push('.');
+            result.push('0');
+        }
+        return result;
+    }
+
+    fn is_within_acceptable_range(a_orig: f64, b_orig: f64) -> bool {
+        let mut a = a_orig;
+        let mut b = b_orig;
+
+        // handle cases where one or both is zero -- adding a small value to
+        //   each won't really affect the ratio between them
+        if a == 0.0 || b == 0.0 {
+            a += 0.00001;
+            b += 0.00001;
+        }
+
         let ratio = if a > b {
             b / a
         } else {
             a / b
         };
+
         ratio > 0.9999
     }
 
@@ -465,15 +501,7 @@ impl Calculator {
         let mut formatted = String::from("");
 
         let formatted_output = match &output {
-            CalcResult::Float(value) => {
-                value.to_string()
-                // now that BigDecimal is used, we no longer need to round the displayed values
-                //   to "fix" floating point math shortcomings
-                //String::from(
-                //    format!("{:.12}", value.to_string())
-                //        .trim_end_matches('0')
-                //)
-            }
+            CalcResult::Float(value) => value.to_string(),
             CalcResult::Integer(value) => value.to_string(),
             CalcResult::Error(string) => String::from(string)
         };
@@ -1469,6 +1497,166 @@ mod tests {
     fn evaluate_nested_parens() {
         let result = Calculator::evaluate_calc("((1+2)*(3+4))/7").unwrap();
         assert_eq!("3", result);
+    }
+
+    #[test]
+    fn is_within_acceptable_range_one_billionth() {
+        assert_eq!(true, Calculator::is_within_acceptable_range(1.0, 1.000000001));
+    }
+
+    #[test]
+    fn is_within_acceptable_range_two_billionths() {
+        assert_eq!(true, Calculator::is_within_acceptable_range(1.000000002, 1.000000001));
+    }
+
+    #[test]
+    fn is_within_acceptable_range_two_millionths() {
+        assert_eq!(true, Calculator::is_within_acceptable_range(1.000002, 1.000001));
+    }
+
+    #[test]
+    fn is_within_acceptable_range_four_nines() {
+        assert_eq!(false, Calculator::is_within_acceptable_range(1.0, 0.9999));
+    }
+
+    #[test]
+    fn is_within_acceptable_range_five_nines() {
+        assert_eq!(true, Calculator::is_within_acceptable_range(1.0, 0.99999));
+    }
+
+    #[test]
+    fn is_within_acceptable_range_two_zeros() {
+        assert_eq!(false, Calculator::is_within_acceptable_range(0.0, 0.001));
+    }
+
+    #[test]
+    fn is_within_acceptable_range_three_zeros() {
+        assert_eq!(false, Calculator::is_within_acceptable_range(0.0, 0.0001));
+    }
+
+    #[test]
+    fn is_within_acceptable_range_four_zeros() {
+        assert_eq!(false, Calculator::is_within_acceptable_range(0.0, 0.00001));
+    }
+
+    #[test]
+    fn is_within_acceptable_range_five_zeros() {
+        assert_eq!(false, Calculator::is_within_acceptable_range(0.0, 0.000001));
+    }
+
+    #[test]
+    fn is_within_acceptable_range_six_zeros() {
+        assert_eq!(false, Calculator::is_within_acceptable_range(0.0, 0.0000001));
+    }
+
+    #[test]
+    fn is_within_acceptable_range_hundred_thousandth() {
+        assert_eq!(true, Calculator::is_within_acceptable_range(0.0000099999, 0.00001));
+    }
+
+    #[test]
+    fn is_within_acceptable_range_tenth_hundredth() {
+        assert_eq!(false, Calculator::is_within_acceptable_range(0.01, 0.1));
+    }
+
+    #[test]
+    fn is_within_acceptable_range_six_zeros_half() {
+        assert_eq!(false, Calculator::is_within_acceptable_range(0.0000002, 0.0000001));
+    }
+
+    #[test]
+    fn is_within_acceptable_range_five_zeros_double() {
+        assert_eq!(false, Calculator::is_within_acceptable_range(0.000001, 0.000002));
+    }
+
+    #[test]
+    fn is_within_acceptable_range_zero_and_tiny() {
+        assert_eq!(false, Calculator::is_within_acceptable_range(0.0, 0.000005));
+    }
+
+    #[test]
+    fn is_within_acceptable_range_tiny_and_zero() {
+        assert_eq!(false, Calculator::is_within_acceptable_range(0.000005, 0.0));
+    }
+
+    #[test]
+    fn is_within_acceptable_range_zeroes() {
+        assert_eq!(true, Calculator::is_within_acceptable_range(0.0, 0.0));
+    }
+
+    #[test]
+    fn perform_calc_js_eval_int() {
+        assert_eq!(CalcResult::Float(0.0), Calculator::perform_calc_js_eval("1 - 1"));
+    }
+
+    #[test]
+    fn perform_calc_js_eval_two_digit_int() {
+        assert_eq!(CalcResult::Float(10.0), Calculator::perform_calc_js_eval("11 - 1"));
+    }
+
+    #[test]
+    fn perform_calc_js_eval_negative_int() {
+        assert_eq!(CalcResult::Float(-2.0), Calculator::perform_calc_js_eval("-1 - 1"));
+    }
+
+    #[test]
+    fn perform_calc_js_eval_negative_int_last() {
+        assert_eq!(CalcResult::Float(11.0), Calculator::perform_calc_js_eval("10 - -1"));
+    }
+
+    #[test]
+    fn perform_calc_js_eval_decimal() {
+        assert_eq!(CalcResult::Float(4.0), Calculator::perform_calc_js_eval("5.0 - 1"));
+    }
+
+    #[test]
+    fn perform_calc_js_eval_decimal_last() {
+        assert_eq!(CalcResult::Float(4.0), Calculator::perform_calc_js_eval("5 - 1.0"));
+    }
+
+    #[test]
+    fn perform_calc_js_eval_decimal_no_zero_last() {
+        assert_eq!(CalcResult::Float(4.9), Calculator::perform_calc_js_eval("5 - .1"));
+    }
+
+    #[test]
+    fn perform_calc_js_eval_two_digit_decimal_no_zero_last() {
+        assert_eq!(CalcResult::Float(4.89), Calculator::perform_calc_js_eval("5 - .11"));
+    }
+
+    #[test]
+    fn convert_integers_to_decimals_int() {
+        assert_eq!("1.0 - 1.0", Calculator::convert_integers_to_decimals("1 - 1"));
+    }
+
+    #[test]
+    fn convert_integers_to_decimals_int_and_decimal() {
+        assert_eq!("1.0 - 1.1", Calculator::convert_integers_to_decimals("1 - 1.1"));
+    }
+
+    #[test]
+    fn convert_integers_to_decimals_two_digit_int_and_decimal() {
+        assert_eq!("12.0 - 1.1", Calculator::convert_integers_to_decimals("12 - 1.1"));
+    }
+
+    #[test]
+    fn convert_integers_to_decimals_two_digit_int_and_two_digit_decimal() {
+        assert_eq!("12.0 - 12.1", Calculator::convert_integers_to_decimals("12 - 12.1"));
+    }
+
+    #[test]
+    fn convert_integers_to_decimals_paren_int_and_negative_int() {
+        assert_eq!("(1.0) * -2.0", Calculator::convert_integers_to_decimals("(1) * -2"));
+    }
+
+    #[test]
+    fn convert_integers_to_decimals_int_and_two_digit_decimal() {
+        assert_eq!("5.0 - .11", Calculator::convert_integers_to_decimals("5 - .11"));
+    }
+
+    #[test]
+    fn convert_integers_to_decimals_decimal() {
+        assert_eq!("5.0-1.23", Calculator::convert_integers_to_decimals("5.0-1.23"));
     }
 
     // add tets for invalid inputs for get_token_matching_str()

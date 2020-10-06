@@ -8,5 +8,5 @@ edition = "2018"
 
 [dependencies]
 termion = "1.5.5"
-eval = "0.4.3"
+evalexpr = "5.0.5"
 bigdecimal = "0.2.0"
